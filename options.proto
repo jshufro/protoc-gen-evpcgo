@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "./pb";
+
+message Contracts {
+	map<string, string> map = 1;
+}
+
+extend google.protobuf.FileOptions {
+	string abi_package = 62800;
+	Contracts contracts = 62801;
+}
+
+message Binding {
+	string abigen = 1;
+	string go_type = 2;	
+}
+
+extend google.protobuf.FieldOptions {
+	optional Binding binding = 62800;
+}
