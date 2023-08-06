@@ -1,17 +1,33 @@
 protos_rel = $(wildcard protos/*.proto)
 protos = $(addprefix test/, $(protos_rel))
+
+hardhat_artifacts = $(shell find rocketpool/artifacts/contracts/contract -wholename "*.sol/*.json" -not -name "*.dbg.json")
+abis = $(patsubst %.json,abi/%.abi, $(notdir $(hardhat_artifacts)))
+abigo = $(patsubst %.abi,%.go, $(abis))
+
 pwd = $(shell pwd)
 
-all: clean test gopb abi/rocket_storage.go
+all: $(abigo) clean test gopb
 
-.PHONY: clean gopb evpcgo
+.PHONY: clean gopb
+
 gopb: $(protos_rel)
 	protoc --proto_path=.. --go_out=. $(protos) ../options.proto
-evpcgo: $(protos_rel) protoc-gen-evpc
+
+pb/%_evpc.go: protoc-gen-evpc $(protos_rel)
 	PATH=${PATH}:$(pwd) protoc --proto_path=.. --evpcgo_out=. $(protos)
+
 protoc-gen-evpc: ../main.go
 	go build ..
-test: main.go gopb evpcgo
+
+vpath %.json $(shell find rocketpool/artifacts/contracts/contract -type d -name "*.sol")
+abi/%.abi: %.json
+	cat $? | jq .abi > $@
+
+abi/%.go: abi/%.abi
+	abigen --abi $? --pkg abi --type $(patsubst %.abi,%,$(notdir $?)) --out $@
+
+test: main.go gopb pb/storage_evpc.go
 	go build
 
 clean:

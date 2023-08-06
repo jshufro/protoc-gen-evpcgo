@@ -34,6 +34,10 @@ type abiGen struct {
 	ret  []string
 }
 
+func (a *abiGen) ContractName() string {
+	return strings.Split(a.f, ".")[0]
+}
+
 func (a *abiGen) FieldType(g *protogen.GeneratedFile) string {
 	if len(a.ret) == 0 {
 		return "interface{}"
@@ -76,14 +80,15 @@ func parseNativeName(m *protogen.Message) (string, error) {
 	return native, nil
 }
 
-func generateType(g *protogen.GeneratedFile, m *protogen.Message) error {
+func generateTypes(g *protogen.GeneratedFile, m *protogen.Message) error {
 	nativeName, err := parseNativeName(m)
 	if err != nil {
 		return err
 	}
 
-	// Generate a type with our native golang field types
-	g.P("type ", nativeName, " struct {")
+	// Map of field's GoName to the abigen
+	fieldMap := make(map[string]*abiGen)
+
 	for _, f := range m.Fields {
 		o := f.Desc.Options().(*descriptorpb.FieldOptions)
 		binding := proto.GetExtension(o, pb.E_Binding).(*pb.Binding)
@@ -92,10 +97,69 @@ func generateType(g *protogen.GeneratedFile, m *protogen.Message) error {
 			return err
 		}
 
+		fieldMap[f.GoName] = a
+	}
+
+	// Generate a type with our native golang field types
+	g.P("type ", nativeName, " struct {")
+	for fieldName, a := range fieldMap {
 		// Create the field
-		g.P(f.GoName, " ", a.FieldType(g))
+		g.P(fieldName, " ", a.FieldType(g))
 	}
 	g.P("}")
+
+	g.P()
+
+	// Generate a type that stores details (mainly, addresses) for the contract dependencies
+	contractSet := make(map[string]interface{})
+	g.P("type ", nativeName, "_Details struct {")
+	for _, a := range fieldMap {
+		contractSet[a.ContractName()] = struct{}{}
+	}
+	for contract, _ := range contractSet {
+		g.P(contract, "_Address common.Address")
+	}
+	g.P("}")
+
+	// Generate a type that serves as a caller for all the contract dependencies
+	g.P("type Bound_", nativeName, " struct {")
+	for _, a := range fieldMap {
+		contractSet[a.ContractName()] = struct{}{}
+	}
+	for contract, _ := range contractSet {
+		g.P("*abi.", contract)
+	}
+	g.P("}")
+
+	g.P()
+
+	// Generate a function to create the caller
+	g.P("func New", nativeName, "_Details(")
+	for contract, _ := range contractSet {
+		g.P(contract, "_Address common.Address,")
+	}
+	g.P(") (*", nativeName, "_Details) {")
+	g.P("	out := &", nativeName, "_Details{}")
+	for contract, _ := range contractSet {
+		g.P("out.", contract, "_Address = ", contract, "_Address")
+	}
+	g.P("	return out")
+	g.P("}")
+
+	g.P()
+
+	g.P("func (d *", nativeName, "_Details) Bind(backend bind.ContractBackend) (*Bound_", nativeName, ", error) {")
+	g.P("   var err error")
+	g.P("	out := &Bound_", nativeName, "{}")
+	for contract, _ := range contractSet {
+		g.P("out.", contract, ", err = abi.New", contract, "(d.", contract, "_Address, backend)")
+		g.P("if err != nil { return nil, err }")
+	}
+	g.P("	return out, nil")
+	g.P("}")
+
+	g.P()
+
 	return nil
 }
 
@@ -109,40 +173,6 @@ func importAbi(g *protogen.GeneratedFile, f *protogen.File) (string, error) {
 	g.P("import \"", abi_package, "\"")
 	dirs := strings.Split(abi_package, "/")
 	return dirs[len(dirs)-1], nil
-}
-
-func generateContractRegistry(g *protogen.GeneratedFile, f *protogen.File, abiPath string) error {
-	o := f.Desc.Options().(*descriptorpb.FileOptions)
-	contracts := proto.GetExtension(o, pb.E_Contracts).(*pb.Contracts)
-	if contracts == nil {
-		return fmt.Errorf("contracts must be defined")
-	}
-
-	for k, v := range contracts.Map {
-		abiType := abiPath + "." + k
-		g.P("var ", k, "Abi", " *", abiType)
-		g.P("func Get", k, "Abi(client *", ethclient, ", addr string) (*", abiType, ", error) {")
-		g.P("	if ", k, "Abi != nil {")
-		g.P("		return ", k, "Abi, nil")
-		g.P("	}")
-		// Parse contract address to common.Address
-		g.P("	address:= common.HexToAddress(\"", v, "\")")
-		g.P("	out, err := ", abiPath, ".New", k, "(address, client)")
-		g.P("	if err != nil {")
-		g.P("		return nil, err")
-		g.P("	}")
-		g.P("	", k, "Abi = out")
-		g.P("	return out, nil")
-		g.P("}")
-	}
-
-	g.P("var contractAddrMap = map[string]string {")
-	for k, v := range contracts.Map {
-		g.P("	\"", k, "\": \"", v, "\",")
-	}
-	g.P("}")
-
-	return nil
 }
 
 type fields struct {
@@ -185,21 +215,13 @@ func generatePopulate(g *protogen.GeneratedFile, m *protogen.Message) error {
 	}
 
 	// Generate a function which accepts an eth client and bind.CallOpts, and produces the message
-	g.P("// Populate", nativeName, " populates an instance of ", nativeName, " from the provided client.")
-	g.P("func Populate", nativeName, " (m *", nativeName, ", client *", g.QualifiedGoIdent(ethclient), ", opts *", g.QualifiedGoIdent(callOpts), ") error {")
+	g.P("func (c *Bound_", nativeName, ") Populate (dst *", nativeName, ", opts *", g.QualifiedGoIdent(callOpts), ") error {")
 	if len(m.Fields) > 0 {
 		g.P("var err error")
 	}
 
-	for k, _ := range fields.contractGetters {
-		g.P(k)
-		g.P("if err != nil {")
-		g.P("	return err")
-		g.P("}")
-	}
-
 	for k, v := range fields.fieldMap {
-		g.P("m.", k, ", err = contract", strings.Split(v, ".")[0], ".", strings.Split(v, ".")[1], "(opts)")
+		g.P("dst.", k, ", err = c.", strings.Split(v, ".")[1], "(opts)")
 		g.P("if err != nil {")
 		g.P("	return err")
 		g.P("}")
@@ -221,15 +243,13 @@ func generateFile(p *protogen.Plugin, f *protogen.File) error {
 	g.P()
 	g.P("package ", f.GoPackageName)
 	g.P()
-	abiPath, err := importAbi(g, f)
+	_, err := importAbi(g, f)
 	if err != nil {
 		return err
 	}
 
-	generateContractRegistry(g, f, abiPath)
-
 	for _, m := range f.Messages {
-		err := generateType(g, m)
+		err := generateTypes(g, m)
 		if err != nil {
 			return err
 		}

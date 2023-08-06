@@ -4,12 +4,6 @@ import "options.proto";
 
 option go_package = "./pb";
 option (abi_package) = "github.com/jshufro/protoc-gen-evpcgo/test/abi";
-option (contracts) = {
-		map: [{
-			key: "RocketStorage",
-			value: "0x1d8f8f00cfa6758d7bE78336684788Fb0ee0Fa46"
-		}]
-	};
 
 message StorageMessage {
 	bytes guardian = 1 [(binding) = {
@@ -17,5 +11,8 @@ message StorageMessage {
 	}];
 	bool deployed_status = 2 [(binding) = {
 		abigen: "RocketStorage.GetDeployedStatus() (bool, error)"
+	}];
+	bool deposit_enabled = 3 [(binding) = {
+		abigen: "RocketDAOProtocolSettingsDeposit.GetDepositEnabled() (bool, error)",
 	}];
 }
