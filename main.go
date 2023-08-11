@@ -1,14 +1,11 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"strings"
 
-	"github.com/jshufro/protoc-gen-evpcgo/test/pb"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"google.golang.org/protobuf/compiler/protogen"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 var ethclient = protogen.GoIdent{
@@ -21,6 +18,16 @@ var callOpts = protogen.GoIdent{
 	GoImportPath: "github.com/ethereum/go-ethereum/accounts/abi/bind",
 }
 
+var errorf = protogen.GoIdent{
+	GoName:       "Errorf",
+	GoImportPath: "fmt",
+}
+
+var call = protogen.GoIdent{
+	GoName:       "Call",
+	GoImportPath: "github.com/jshufro/protoc-gen-evpcgo/lib",
+}
+
 var customTypes = map[string]protogen.GoIdent{
 	"common.Address": protogen.GoIdent{
 		GoName:       "Address",
@@ -28,119 +35,50 @@ var customTypes = map[string]protogen.GoIdent{
 	},
 }
 
-type abiGen struct {
-	f    string
-	args []string
-	ret  []string
-}
-
-func (a *abiGen) ContractName() string {
-	return strings.Split(a.f, ".")[0]
-}
-
-func (a *abiGen) FieldType(g *protogen.GeneratedFile) string {
-	if len(a.ret) == 0 {
-		return "interface{}"
-	}
-	custom, ok := customTypes[a.ret[0]]
-	if !ok {
-		return a.ret[0]
-	}
-
-	return g.QualifiedGoIdent(custom)
-}
-
-// Parse the function name, arguments (if any), and returned values from an abigen binding
-func parseAbigen(a string) (*abiGen, error) {
-	out := abiGen{}
-	endFunc := strings.Index(a, ")")
-	if endFunc == -1 {
-		return nil, fmt.Errorf("invalid binding abigen '%s', could not determine function name", a)
-	}
-	if strings.Count(a[:endFunc], "(") != 1 {
-		return nil, fmt.Errorf("invalid binding abigen '%s', could not determine function name", a)
-	}
-	startArgs := strings.Index(a, "(")
-	out.f = a[:startArgs]
-
-	args := a[startArgs+1 : endFunc]
-	out.args = strings.Split(args, ",")
-
-	remainder := strings.TrimSpace(a[endFunc+1:])
-	out.ret = strings.Split(strings.Trim(remainder, "()"), ",")
-
-	return &out, nil
-}
-
-func parseNativeName(m *protogen.Message) (string, error) {
-	native := strings.TrimSuffix(m.GoIdent.GoName, "Message")
-	if native == m.GoIdent.GoName {
-		return "", fmt.Errorf("evpc protobuf messages must end in 'Message', got: '%s'", m.GoIdent.GoName)
-	}
-	return native, nil
-}
-
-func generateTypes(g *protogen.GeneratedFile, m *protogen.Message) error {
-	nativeName, err := parseNativeName(m)
-	if err != nil {
-		return err
-	}
-
-	// Map of field's GoName to the abigen
-	fieldMap := make(map[string]*abiGen)
-
-	for _, f := range m.Fields {
-		o := f.Desc.Options().(*descriptorpb.FieldOptions)
-		binding := proto.GetExtension(o, pb.E_Binding).(*pb.Binding)
-		a, err := parseAbigen(binding.Abigen)
-		if err != nil {
-			return err
-		}
-
-		fieldMap[f.GoName] = a
-	}
+func generateTypes(g *protogen.GeneratedFile, s *Struct, abiPrefix string) error {
 
 	// Generate a type with our native golang field types
-	g.P("type ", nativeName, " struct {")
-	for fieldName, a := range fieldMap {
+	g.P("type ", s.Name, " struct {")
+	for _, f := range s.Fields {
 		// Create the field
-		g.P(fieldName, " ", a.FieldType(g))
+		if ct, ok := customTypes[f.Type]; ok {
+			g.P(f.Name, " ", ct)
+		} else {
+			g.P(f.Name, " ", f.Type)
+		}
 	}
 	g.P("}")
 
 	g.P()
 
 	// Generate a type that stores details (mainly, addresses) for the contract dependencies
-	contractSet := make(map[string]interface{})
-	g.P("type ", nativeName, "_Details struct {")
-	for _, a := range fieldMap {
-		contractSet[a.ContractName()] = struct{}{}
-	}
-	for contract, _ := range contractSet {
+	g.P("type ", s.Name, "_Details struct {")
+	for _, contract := range s.contracts {
 		g.P(contract, "_Address common.Address")
-	}
-	g.P("}")
-
-	// Generate a type that serves as a caller for all the contract dependencies
-	g.P("type Bound_", nativeName, " struct {")
-	for _, a := range fieldMap {
-		contractSet[a.ContractName()] = struct{}{}
-	}
-	for contract, _ := range contractSet {
-		g.P("*abi.", contract)
 	}
 	g.P("}")
 
 	g.P()
 
+	// Generate a type that serves as a caller for all the contract dependencies
+	g.P("type Bound_", s.Name, " struct {")
+	for _, contract := range s.contracts {
+		g.P("*", abiPrefix, contract)
+	}
+
+	g.P("	details *", s.Name, "_Details")
+	g.P("}")
+
+	g.P()
+
 	// Generate a function to create the caller
-	g.P("func New", nativeName, "_Details(")
-	for contract, _ := range contractSet {
+	g.P("func New", s.Name, "_Details(")
+	for _, contract := range s.contracts {
 		g.P(contract, "_Address common.Address,")
 	}
-	g.P(") (*", nativeName, "_Details) {")
-	g.P("	out := &", nativeName, "_Details{}")
-	for contract, _ := range contractSet {
+	g.P(") (*", s.Name, "_Details) {")
+	g.P("	out := &", s.Name, "_Details{}")
+	for _, contract := range s.contracts {
 		g.P("out.", contract, "_Address = ", contract, "_Address")
 	}
 	g.P("	return out")
@@ -148,12 +86,14 @@ func generateTypes(g *protogen.GeneratedFile, m *protogen.Message) error {
 
 	g.P()
 
-	g.P("func (d *", nativeName, "_Details) Bind(backend bind.ContractBackend) (*Bound_", nativeName, ", error) {")
+	g.P("func (d *", s.Name, "_Details) Bind(backend bind.ContractBackend) (*Bound_", s.Name, ", error) {")
 	g.P("   var err error")
-	g.P("	out := &Bound_", nativeName, "{}")
-	for contract, _ := range contractSet {
-		g.P("out.", contract, ", err = abi.New", contract, "(d.", contract, "_Address, backend)")
-		g.P("if err != nil { return nil, err }")
+	g.P("	out := &Bound_", s.Name, "{")
+	g.P("		details: d,")
+	g.P("}")
+	for _, contract := range s.contracts {
+		g.P("out.", contract, ", err = ", abiPrefix, "New", contract, "(d.", contract, "_Address, backend)")
+		g.P("if err != nil { return nil, ", errorf, "(\"failed to bind contract ", contract, " to address %s: %v\", d.", contract, "_Address, err) }")
 	}
 	g.P("	return out, nil")
 	g.P("}")
@@ -163,67 +103,85 @@ func generateTypes(g *protogen.GeneratedFile, m *protogen.Message) error {
 	return nil
 }
 
-func importAbi(g *protogen.GeneratedFile, f *protogen.File) (string, error) {
-	o := f.Desc.Options().(*descriptorpb.FileOptions)
-	abi_package := proto.GetExtension(o, pb.E_AbiPackage).(string)
-	if abi_package == "" {
-		return "", fmt.Errorf("abi_package must be defined")
+func importAbi(g *protogen.GeneratedFile, spec *File) (string, error) {
+	if spec.AbiPackage == "" {
+		return "", nil
 	}
-
-	g.P("import \"", abi_package, "\"")
-	dirs := strings.Split(abi_package, "/")
-	return dirs[len(dirs)-1], nil
+	g.P("import _abi \"", spec.AbiPackage, "\"")
+	return "_abi.", nil
 }
 
 type fields struct {
-	fieldMap        map[string]string      // Map of field names to the contract namess whence their data comes
-	contractGetters map[string]interface{} // Map of deduplicated contract names
+	fieldMap map[string]string // Map of field names to the contract namess whence their data comes
 }
 
-func populateParseFields(fs []*protogen.Field) (*fields, error) {
-	out := &fields{}
-	out.fieldMap = make(map[string]string)
-	out.contractGetters = make(map[string]interface{})
+func generateRaw(g *protogen.GeneratedFile, s *Struct) error {
 
-	// Grab the bound abi
-	for _, f := range fs {
-		fieldName := f.GoName
-		o := f.Desc.Options().(*descriptorpb.FieldOptions)
-		binding := proto.GetExtension(o, pb.E_Binding).(*pb.Binding)
-		a, err := parseAbigen(binding.Abigen)
-		if err != nil {
-			return nil, err
-		}
-
-		contractName := strings.Split(a.f, ".")[0]
-		out.fieldMap[fieldName] = a.f
-		out.contractGetters[fmt.Sprintf("contract%s, err := Get%sAbi(client, contractAddrMap[\"%s\"])", contractName, contractName, contractName)] = struct{}{}
+	// Generate functions for each field
+	for _, field := range s.Fields {
+		g.P("func (c *Bound_", s.Name, ") Raw", field.Name, "(dst *", s.Name, ") (*", call, ", error) {")
+		g.P("	var err error")
+		g.P("	out := new(", call, ")")
+		g.P("	out.Address = &c.details.", field.Contract, "_Address")
+		g.P("	parsedAbi, err := ", field.Contract, "MetaData.GetAbi()")
+		g.P("	if err != nil {")
+		g.P("		return nil, fmt.Errorf(\"failed to parse ABI for ", field.Contract, ": %v\", err)")
+		g.P("	}")
+		g.P("	out.Abi = parsedAbi")
+		g.P("	out.CallData, err = parsedAbi.Pack(\"", field.Selector.Name, "\")")
+		g.P("	if err != nil {")
+		g.P("		return nil, fmt.Errorf(\"failed to pack ABI for ", field.Contract, ": %v\", err)")
+		g.P("	}")
+		g.P("	out.Method = \"", field.Selector.Name, "\"")
+		g.P("	out.Destination = &dst.", field.Name)
+		g.P("	return out, err")
+		g.P("}")
+		g.P()
 	}
 
-	return out, nil
+	// Generate a function which accepts a bind.CallOpts, and produces all the calls
+	g.P("func (c *Bound_", s.Name, ") Raw (dst *", s.Name, ") ([]*", call, ", error) {")
+	if len(s.Fields) > 0 {
+		g.P("var err error")
+		g.P("var call *", call)
+	}
+	g.P("	out := make([]*", call, ",0,", len(s.Fields), ")")
+
+	for _, field := range s.Fields {
+		g.P("call, err = c.Raw", field.Name, "(dst)")
+		g.P("if err != nil {")
+		g.P("	return nil, ", errorf, "(\"failed to get raw data for field ", field.Name, ": %v\", err)")
+		g.P("}")
+		g.P("out = append(out, call)")
+	}
+	g.P("return out, nil")
+	g.P("}")
+
+	return nil
 }
 
-func generatePopulate(g *protogen.GeneratedFile, m *protogen.Message) error {
-	nativeName, err := parseNativeName(m)
-	if err != nil {
-		return err
-	}
+func generatePopulate(g *protogen.GeneratedFile, s *Struct) error {
 
-	fields, err := populateParseFields(m.Fields)
-	if err != nil {
-		return err
+	// Generate functions for each field
+	for _, field := range s.Fields {
+		g.P("func (c *Bound_", s.Name, ") Populate", field.Name, "(dst *", s.Name, ", opts *", g.QualifiedGoIdent(callOpts), ") error {")
+		g.P("	var err error")
+		g.P("	dst.", field.Name, ", err = c.", abi.ToCamelCase(field.Selector.Name), "(opts)")
+		g.P("	return err")
+		g.P("}")
+		g.P()
 	}
 
 	// Generate a function which accepts an eth client and bind.CallOpts, and produces the message
-	g.P("func (c *Bound_", nativeName, ") Populate (dst *", nativeName, ", opts *", g.QualifiedGoIdent(callOpts), ") error {")
-	if len(m.Fields) > 0 {
+	g.P("func (c *Bound_", s.Name, ") Populate (dst *", s.Name, ", opts *", g.QualifiedGoIdent(callOpts), ") error {")
+	if len(s.Fields) > 0 {
 		g.P("var err error")
 	}
 
-	for k, v := range fields.fieldMap {
-		g.P("dst.", k, ", err = c.", strings.Split(v, ".")[1], "(opts)")
+	for _, field := range s.Fields {
+		g.P("err = c.Populate", field.Name, "(dst, opts)")
 		g.P("if err != nil {")
-		g.P("	return err")
+		g.P("	return ", errorf, "(\"failed to populate field ", field.Name, ": %v\", err)")
 		g.P("}")
 	}
 	g.P("return nil")
@@ -232,28 +190,40 @@ func generatePopulate(g *protogen.GeneratedFile, m *protogen.Message) error {
 	return nil
 }
 
-func generateFile(p *protogen.Plugin, f *protogen.File) error {
+func packageFromSpec(spec *File) string {
+	s := strings.Split(spec.AbiPackage, "/")
+	return s[len(s)-1]
+}
+
+func generateFile(p *protogen.Plugin, f *protogen.File, spec *File) error {
 	if len(f.Messages) == 0 {
 		return nil
 	}
 
 	filename := f.GeneratedFilenamePrefix + "_evpc.pb.go"
-	g := p.NewGeneratedFile(filename, f.GoImportPath)
+	// Replace the pb path with the abi path
+	filename = strings.Replace(filename, string(f.GoPackageName), spec.AbiPackage, 1)
+	g := p.NewGeneratedFile("abi/storage_evpc.pb.go", protogen.GoImportPath(spec.AbiPackage))
 	g.P("// Code generated by protoc-gen-evpcgo. DO NOT EDIT.")
 	g.P()
-	g.P("package ", f.GoPackageName)
+	g.P("package ", packageFromSpec(spec))
 	g.P()
-	_, err := importAbi(g, f)
+	/*abiPrefix, err := importAbi(g, spec)
 	if err != nil {
 		return err
-	}
+	}*/
+	abiPrefix := ""
 
-	for _, m := range f.Messages {
-		err := generateTypes(g, m)
+	for _, s := range spec.Structs {
+		err := generateTypes(g, s, abiPrefix)
 		if err != nil {
 			return err
 		}
-		err = generatePopulate(g, m)
+		err = generatePopulate(g, s)
+		if err != nil {
+			return err
+		}
+		err = generateRaw(g, s)
 		if err != nil {
 			return err
 		}
@@ -270,7 +240,12 @@ func main() {
 				continue
 			}
 
-			if err := generateFile(plugin, file); err != nil {
+			spec, err := parseProto(plugin, file)
+			if err != nil {
+				return err
+			}
+
+			if err := generateFile(plugin, file, spec); err != nil {
 				return err
 			}
 		}

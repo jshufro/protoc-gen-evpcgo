@@ -5,6 +5,7 @@ go 1.19
 require (
 	github.com/ethereum/go-ethereum v1.12.0
 	github.com/golang/protobuf v1.5.2
+	github.com/rocket-pool/rocketpool-go v1.10.1-0.20230725050235-95760eb06524
 	google.golang.org/protobuf v1.31.0
 )
 
@@ -18,11 +19,15 @@ require (
 	github.com/go-stack/stack v1.8.1 // indirect
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect
+	github.com/hashicorp/go-version v1.6.0 // indirect
 	github.com/holiman/uint256 v1.2.2-0.20230321075855-87b91420868c // indirect
 	github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible // indirect
 	github.com/tklauser/go-sysconf v0.3.5 // indirect
 	github.com/tklauser/numcpus v0.2.2 // indirect
 	golang.org/x/crypto v0.1.0 // indirect
+	golang.org/x/sync v0.1.0 // indirect
 	golang.org/x/sys v0.7.0 // indirect
 	gopkg.in/natefinch/npipe.v2 v2.0.0-20160621034901-c1b8fa8bdcce // indirect
 )
+
+replace github.com/rocket-pool/rocketpool-go v1.10.1-0.20230725050235-95760eb06524 => /home/jacob/rocketpool/rocketpool-go

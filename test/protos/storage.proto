@@ -3,16 +3,21 @@ syntax = "proto3";
 import "options.proto";
 
 option go_package = "./pb";
-option (abi_package) = "github.com/jshufro/protoc-gen-evpcgo/test/abi";
+option (abi_package) = "./abi";
+option (version) = "0.0.1";
 
 message StorageMessage {
 	bytes guardian = 1 [(binding) = {
-		abigen: "RocketStorage.GetGuardian() (common.Address, error)",
+		contract: "RocketStorage",
+		selector: "getGuardian()",
+		go_type: "common.Address",
 	}];
 	bool deployed_status = 2 [(binding) = {
-		abigen: "RocketStorage.GetDeployedStatus() (bool, error)"
+		contract: "RocketStorage",
+		selector: "getDeployedStatus()",
 	}];
 	bool deposit_enabled = 3 [(binding) = {
-		abigen: "RocketDAOProtocolSettingsDeposit.GetDepositEnabled() (bool, error)",
+		contract: "RocketDAOProtocolSettingsDeposit",
+		selector: "getDepositEnabled()",
 	}];
 }

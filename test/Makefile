@@ -14,7 +14,7 @@ all: $(abigo) clean test gopb
 gopb: $(protos_rel)
 	protoc --proto_path=.. --go_out=. $(protos) ../options.proto
 
-pb/%_evpc.go: protoc-gen-evpc $(protos_rel)
+abi/%_evpc.go: protoc-gen-evpc $(protos_rel)
 	PATH=${PATH}:$(pwd) protoc --proto_path=.. --evpcgo_out=. $(protos)
 
 protoc-gen-evpc: ../main.go
@@ -27,8 +27,8 @@ abi/%.abi: %.json
 abi/%.go: abi/%.abi
 	abigen --abi $? --pkg abi --type $(patsubst %.abi,%,$(notdir $?)) --out $@
 
-test: main.go gopb pb/storage_evpc.go
+test: main.go gopb abi/storage_evpc.go
 	go build
 
 clean:
-	rm -f pb/*
+	rm -rf pb/*

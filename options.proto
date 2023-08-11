@@ -6,11 +6,13 @@ option go_package = "./pb";
 
 extend google.protobuf.FileOptions {
 	string abi_package = 62800;
+	string version = 62801;
 }
 
 message Binding {
-	string abigen = 1;
-	string go_type = 2;	
+	string contract = 1;
+	string selector = 2;	
+	string go_type = 3;
 }
 
 extend google.protobuf.FieldOptions {
