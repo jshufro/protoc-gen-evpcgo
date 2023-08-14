@@ -1,7 +1,7 @@
 protos_rel = $(wildcard protos/*.proto)
 protos = $(addprefix test/, $(protos_rel))
 
-hardhat_artifacts = $(shell find rocketpool/artifacts/contracts/contract -wholename "*.sol/*.json" -not -name "*.dbg.json")
+hardhat_artifacts = $(shell find rocketpool/artifacts/contracts/contract -wholename "*.sol/*.json" -not -name "*.dbg.json" -not -name "*Old.json")
 abis = $(patsubst %.json,abi/%.abi, $(notdir $(hardhat_artifacts)))
 abigo = $(patsubst %.abi,%.go, $(abis))
 
