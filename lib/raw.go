@@ -19,7 +19,7 @@ const callMsgKey = contextKey(0)
 type Call struct {
 	Address     *common.Address
 	Abi         *abi.ABI
-	CallData    []byte
+	CallData    func() ([]byte, error)
 	Method      string
 	Destination interface{}
 }
@@ -59,7 +59,9 @@ func (i *Interceptor[T]) CallContract(ctx context.Context, call ethereum.CallMsg
 	out := new(Call)
 	out.Address = call.To
 	out.Abi = i.abi
-	out.CallData = call.Data
+	out.CallData = func() ([]byte, error) {
+		return call.Data, nil
+	}
 	out.Destination = i.callInfo.dst
 	out.Method = method.Name
 	*dst = append(*dst, out)

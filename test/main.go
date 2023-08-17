@@ -14,12 +14,16 @@ import (
 )
 
 // Utility function to translate the library Call format to multicaller's expected call format
-func multicallWrapper(mc *multicall.MultiCaller, calls []*lib.Call) {
+func multicallWrapper(mc *multicall.MultiCaller, calls []*lib.Call) error {
 	for _, call := range calls {
 		c := call // Goddamn golang closures are annoying. Don't close over the iterator.
+		callData, err := c.CallData()
+		if err != nil {
+			return fmt.Errorf("Error getting CallData for %s: %v", call.Method, err)
+		}
 		mc.Calls = append(mc.Calls, multicall.Call{
 			Target:   *c.Address,
-			CallData: c.CallData,
+			CallData: callData,
 			UnpackFunc: func(rawData []byte) error {
 				err := c.Abi.UnpackIntoInterface(c.Destination, c.Method, rawData)
 				if err != nil {
@@ -29,6 +33,7 @@ func multicallWrapper(mc *multicall.MultiCaller, calls []*lib.Call) {
 			},
 		})
 	}
+	return nil
 }
 
 func main() {

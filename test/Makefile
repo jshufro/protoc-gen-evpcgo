@@ -21,6 +21,7 @@ protoc-gen-evpc: ../main.go
 	go build ..
 
 vpath %.json $(shell find rocketpool/artifacts/contracts/contract -type d -name "*.sol")
+.PRECIOUS: abi/%.abi
 abi/%.abi: %.json
 	cat $? | jq .abi > $@
 
